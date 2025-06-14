@@ -24,21 +24,37 @@ export const useTeam = () => {
   const [loading, setLoading] = useState(true);
 
   const fetchTeamMembers = async () => {
-    if (!user) return;
+    if (!user) {
+      console.log('No user found, skipping team fetch');
+      setLoading(false);
+      return;
+    }
     
     try {
       console.log('=== DEBUGGING TEAM FETCH ===');
-      console.log('Fetching team members for user:', user.id);
+      console.log('Current user ID:', user.id);
+      console.log('Current user email:', user.email);
       
-      // First get current user's profile with more details
+      // First, let's see ALL profiles in the database
+      const { data: allProfiles, error: allError } = await supabase
+        .from('profiles')
+        .select('*');
+      
+      console.log('=== ALL PROFILES IN DATABASE ===');
+      console.log('Total profiles found:', allProfiles?.length || 0);
+      console.log('All profiles:', allProfiles);
+      if (allError) console.error('Error fetching all profiles:', allError);
+
+      // Get current user's profile
       const { data: currentUserProfile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', user.id)
         .single();
 
-      console.log('Current user full profile:', currentUserProfile);
-      console.log('Profile fetch error:', profileError);
+      console.log('=== CURRENT USER PROFILE ===');
+      console.log('Current user profile:', currentUserProfile);
+      if (profileError) console.error('Profile fetch error:', profileError);
 
       if (!currentUserProfile) {
         console.error('No profile found for current user');
@@ -46,92 +62,48 @@ export const useTeam = () => {
         return;
       }
 
-      const organizationId = currentUserProfile.organization_id;
-      console.log('Current user organization_id:', organizationId);
-      
-      // Fetch ALL profiles first to see what's in the database
-      const { data: allProfiles, error: allError } = await supabase
-        .from('profiles')
-        .select('*');
-      
-      console.log('=== ALL PROFILES IN DATABASE ===');
-      console.log('All profiles:', allProfiles);
-      console.log('All profiles error:', allError);
-
-      // If current user doesn't have organization_id, update it
-      if (!organizationId) {
-        console.log('Current user missing organization_id, updating...');
-        const defaultOrgId = '00000000-0000-0000-0000-000000000001';
-        
-        const { error: updateCurrentUserError } = await supabase
-          .from('profiles')
-          .update({ organization_id: defaultOrgId })
-          .eq('id', user.id);
-        
-        if (updateCurrentUserError) {
-          console.error('Error updating current user organization_id:', updateCurrentUserError);
-        } else {
-          console.log('Updated current user organization_id to:', defaultOrgId);
-          // Update all other profiles without organization_id
-          const { error: updateOthersError } = await supabase
-            .from('profiles')
-            .update({ organization_id: defaultOrgId })
-            .is('organization_id', null);
-          
-          if (updateOthersError) {
-            console.error('Error updating other profiles organization_id:', updateOthersError);
-          } else {
-            console.log('Updated other profiles organization_id');
-          }
-        }
-        
-        // Re-fetch all profiles after update
-        const { data: updatedProfiles } = await supabase
-          .from('profiles')
-          .select('*');
-        console.log('Updated profiles:', updatedProfiles);
-      }
-      
-      // Update any profiles that don't have an organization_id to match current user's org
-      if (organizationId) {
-        console.log('Updating profiles without organization_id to match current user...');
-        const { error: updateError } = await supabase
-          .from('profiles')
-          .update({ organization_id: organizationId })
-          .is('organization_id', null);
-        
-        if (updateError) {
-          console.error('Error updating profiles organization_id:', updateError);
-        } else {
-          console.log('Successfully updated profiles without organization_id');
-        }
-      }
-
-      // Final organization ID to use
-      const finalOrgId = organizationId || '00000000-0000-0000-0000-000000000001';
-      console.log('Using final organization ID for query:', finalOrgId);
-      
-      // Fetch team members (excluding current user)
-      const { data: teamData, error: teamError } = await supabase
+      // For now, let's get ALL other profiles (not just by organization)
+      // to see if the organization filtering is the issue
+      const { data: allOtherProfiles, error: allOthersError } = await supabase
         .from('profiles')
         .select('*')
-        .eq('organization_id', finalOrgId)
         .neq('id', user.id);
 
-      console.log('=== TEAM QUERY RESULTS ===');
-      console.log('Team members query result:', teamData);
-      console.log('Team query error:', teamError);
-      console.log('Query used organization_id:', finalOrgId);
-      console.log('Excluded user_id:', user.id);
+      console.log('=== ALL OTHER PROFILES (excluding current user) ===');
+      console.log('Other profiles count:', allOtherProfiles?.length || 0);
+      console.log('Other profiles:', allOtherProfiles);
+      if (allOthersError) console.error('Error fetching other profiles:', allOthersError);
 
-      if (teamError) {
-        console.error('Error fetching team members:', teamError);
-        throw teamError;
+      // Now try organization-based filtering
+      const organizationId = currentUserProfile.organization_id;
+      console.log('=== ORGANIZATION FILTERING ===');
+      console.log('Current user organization_id:', organizationId);
+
+      let teamData = [];
+      
+      if (organizationId) {
+        // Try to fetch by organization
+        const { data: orgTeamData, error: orgError } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('organization_id', organizationId)
+          .neq('id', user.id);
+
+        console.log('Org-based team query result:', orgTeamData);
+        console.log('Org-based team query error:', orgError);
+        teamData = orgTeamData || [];
+      } else {
+        console.log('No organization_id found, using all other profiles');
+        teamData = allOtherProfiles || [];
       }
+
+      console.log('=== FINAL TEAM DATA ===');
+      console.log('Final team data:', teamData);
+      console.log('Team members count:', teamData.length);
 
       // Get task counts for each team member
       const membersWithStats = await Promise.all(
-        (teamData || []).map(async (member) => {
+        teamData.map(async (member) => {
           try {
             const { data: completedTasks } = await supabase
               .from('tasks')
@@ -175,11 +147,11 @@ export const useTeam = () => {
 
       console.log('=== FINAL RESULT ===');
       console.log('Final team members with stats:', membersWithStats);
-      console.log('Total team members found:', membersWithStats.length);
+      console.log('Total team members to display:', membersWithStats.length);
       
       setTeamMembers(membersWithStats);
     } catch (error) {
-      console.error('Error fetching team members:', error);
+      console.error('Error in fetchTeamMembers:', error);
     } finally {
       setLoading(false);
     }
@@ -187,7 +159,11 @@ export const useTeam = () => {
 
   useEffect(() => {
     if (user) {
+      console.log('useTeam: User found, fetching team members');
       fetchTeamMembers();
+    } else {
+      console.log('useTeam: No user, setting loading to false');
+      setLoading(false);
     }
   }, [user?.id]);
 
