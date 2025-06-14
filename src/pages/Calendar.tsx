@@ -1,16 +1,18 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAppData } from '@/contexts/AppDataContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, Clock, Users } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, isToday, addMonths, subMonths } from 'date-fns';
+import ScheduleTaskDialog from '@/components/ScheduleTaskDialog';
 
 const Calendar = () => {
-  const { tasks, tasksLoading, teamMembers } = useAppData();
+  const { tasks, tasksLoading, teamMembers, profile } = useAppData();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [showScheduleDialog, setShowScheduleDialog] = useState(false);
 
   // Generate calendar days
   const monthStart = startOfMonth(currentDate);
@@ -60,6 +62,32 @@ const Calendar = () => {
     }
   };
 
+  const handleScheduleTask = (date?: Date) => {
+    setSelectedDate(date || null);
+    setShowScheduleDialog(true);
+  };
+
+  // Filter tasks based on user role
+  const filteredTasks = useMemo(() => {
+    if (!profile) return tasks;
+    
+    // Super admin (team_lead) can see all tasks
+    if (profile.role === 'team_lead') {
+      return tasks;
+    }
+    
+    // Team members only see their assigned tasks
+    return tasks.filter(task => task.assignee_id === profile.id);
+  }, [tasks, profile]);
+
+  const filteredMonthTasks = useMemo(() => {
+    return filteredTasks.filter(task => {
+      if (!task.due_date) return false;
+      const taskDate = new Date(task.due_date);
+      return isSameMonth(taskDate, currentDate);
+    });
+  }, [filteredTasks, currentDate]);
+
   if (tasksLoading) {
     return (
       <div className="min-h-screen bg-gray-50 p-6">
@@ -79,7 +107,10 @@ const Calendar = () => {
             <h1 className="text-2xl font-bold text-gray-900">Calendar</h1>
             <p className="text-gray-600">Track deadlines and schedule your social media tasks</p>
           </div>
-          <Button className="flex items-center gap-2">
+          <Button 
+            className="flex items-center gap-2"
+            onClick={() => handleScheduleTask()}
+          >
             <Plus className="w-4 h-4" />
             Schedule Task
           </Button>
@@ -92,7 +123,7 @@ const Calendar = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600">This Month</p>
-                  <p className="text-2xl font-bold text-gray-900">{monthTasks.length}</p>
+                  <p className="text-2xl font-bold text-gray-900">{filteredMonthTasks.length}</p>
                 </div>
                 <CalendarIcon className="w-8 h-8 text-blue-500" />
               </div>
@@ -104,7 +135,9 @@ const Calendar = () => {
                 <div>
                   <p className="text-sm text-gray-600">Due Today</p>
                   <p className="text-2xl font-bold text-orange-600">
-                    {getTasksForDate(new Date()).length}
+                    {filteredTasks.filter(task => 
+                      task.due_date && isSameDay(new Date(task.due_date), new Date())
+                    ).length}
                   </p>
                 </div>
                 <Clock className="w-8 h-8 text-orange-500" />
@@ -117,7 +150,7 @@ const Calendar = () => {
                 <div>
                   <p className="text-sm text-gray-600">Overdue</p>
                   <p className="text-2xl font-bold text-red-600">
-                    {tasks.filter(task => 
+                    {filteredTasks.filter(task => 
                       task.due_date && 
                       new Date(task.due_date) < new Date() && 
                       task.status !== 'completed'
@@ -134,7 +167,10 @@ const Calendar = () => {
                 <div>
                   <p className="text-sm text-gray-600">Team Tasks</p>
                   <p className="text-2xl font-bold text-green-600">
-                    {monthTasks.filter(task => task.assignee_id).length}
+                    {profile?.role === 'team_lead' 
+                      ? filteredMonthTasks.filter(task => task.assignee_id).length
+                      : filteredMonthTasks.filter(task => task.assignee_id === profile?.id).length
+                    }
                   </p>
                 </div>
                 <Users className="w-8 h-8 text-green-500" />
@@ -172,18 +208,23 @@ const Calendar = () => {
                 
                 <div className="grid grid-cols-7 gap-1">
                   {calendarDays.map(day => {
-                    const dayTasks = getTasksForDate(day);
+                    const dayTasks = filteredTasks.filter(task => {
+                      if (!task.due_date) return false;
+                      return isSameDay(new Date(task.due_date), day);
+                    });
                     const isSelected = selectedDate && isSameDay(day, selectedDate);
                     
                     return (
                       <div
                         key={day.toString()}
                         onClick={() => setSelectedDate(day)}
+                        onDoubleClick={() => handleScheduleTask(day)}
                         className={`
                           relative p-2 h-24 border border-gray-200 cursor-pointer hover:bg-gray-50 transition-colors
                           ${isToday(day) ? 'bg-blue-50 border-blue-200' : ''}
                           ${isSelected ? 'ring-2 ring-blue-500' : ''}
                         `}
+                        title="Double-click to schedule a task on this date"
                       >
                         <div className={`text-sm ${isToday(day) ? 'font-bold text-blue-600' : 'text-gray-900'}`}>
                           {format(day, 'd')}
@@ -216,9 +257,21 @@ const Calendar = () => {
           <div>
             <Card>
               <CardHeader>
-                <CardTitle>
-                  {selectedDate ? format(selectedDate, 'EEEE, MMMM d') : 'Select a date'}
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle>
+                    {selectedDate ? format(selectedDate, 'EEEE, MMMM d') : 'Select a date'}
+                  </CardTitle>
+                  {selectedDate && (
+                    <Button 
+                      size="sm" 
+                      onClick={() => handleScheduleTask(selectedDate)}
+                      className="flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" />
+                      Add Task
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
                 {selectedDate ? (
@@ -270,7 +323,7 @@ const Calendar = () => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {tasks
+                  {filteredTasks
                     .filter(task => 
                       task.due_date && 
                       new Date(task.due_date) >= new Date() && 
@@ -302,6 +355,12 @@ const Calendar = () => {
           </div>
         </div>
       </div>
+
+      <ScheduleTaskDialog
+        open={showScheduleDialog}
+        onOpenChange={setShowScheduleDialog}
+        selectedDate={selectedDate}
+      />
     </div>
   );
 };
