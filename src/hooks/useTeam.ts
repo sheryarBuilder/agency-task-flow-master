@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import { useTeamRealtime } from './useTeamRealtime';
 
 export interface TeamMember {
   id: string;
@@ -20,6 +21,7 @@ export interface TeamMember {
 
 export const useTeam = () => {
   const { user } = useAuth();
+  const { subscribeToTeamRealtime, unsubscribeFromTeamRealtime } = useTeamRealtime();
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -151,29 +153,23 @@ export const useTeam = () => {
   };
 
   useEffect(() => {
-    console.log('useTeam effect triggered, user:', user?.id);
-    if (user) {
-      fetchTeamMembers();
-    }
+    if (!user) return;
 
-    // Set up realtime subscription for profile changes
-    const channel = supabase
-      .channel('team-profiles-changes')
-      .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'profiles' },
-        (payload) => {
-          console.log('Profile change detected:', payload);
-          // Refetch team members when profiles change
-          if (user) {
-            fetchTeamMembers();
-          }
-        }
-      )
-      .subscribe();
+    console.log('Setting up team hook for user:', user.id);
+    fetchTeamMembers();
+    subscribeToTeamRealtime(user.id);
+
+    const handleTeamUpdate = () => {
+      console.log('Team updated via realtime, refetching...');
+      fetchTeamMembers();
+    };
+
+    window.addEventListener('team-updated', handleTeamUpdate);
 
     return () => {
-      console.log('Cleaning up team subscription');
-      supabase.removeChannel(channel);
+      console.log('Cleanup: removing team hook subscriber');
+      unsubscribeFromTeamRealtime();
+      window.removeEventListener('team-updated', handleTeamUpdate);
     };
   }, [user?.id]);
 
