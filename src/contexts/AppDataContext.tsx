@@ -1,115 +1,110 @@
-
-import React, { createContext, useContext, useEffect, useState, useMemo } from 'react';
-import { useAuth } from '@/hooks/useAuth';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useTasks } from '@/hooks/useTasks';
-import { useClients } from '@/hooks/useClients';
 import { useTeam } from '@/hooks/useTeam';
-import { useProfile } from '@/hooks/useProfile';
-import { Task } from '@/types/task';
-import { Client } from '@/types/client';
-import { TeamMember } from '@/hooks/useTeam';
-
-interface AnalyticsData {
-  totalTasks: number;
-  completedTasks: number;
-  completionRate: number;
-  overdueTasks: number;
-  averageCompletionTime: number;
-  tasksByPlatform: Record<string, number>;
-  tasksByPriority: Record<string, number>;
-  teamProductivity: Array<{
-    memberId: string;
-    name: string;
-    completedTasks: number;
-    efficiency: number;
-  }>;
-  weeklyProgress: Array<{
-    week: string;
-    created: number;
-    completed: number;
-  }>;
-}
+import { useActivity } from '@/hooks/useActivity';
+import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
 
 interface AppDataContextType {
-  // Tasks
-  tasks: Task[];
+  // Tasks data
+  tasks: any[];
   tasksLoading: boolean;
-  createTask: (taskData: any) => Promise<void>;
-  updateTask: (taskId: string, updates: Partial<Task>) => Promise<void>;
-  updateTaskStatus: (taskId: string, status: Task['status']) => Promise<void>;
-  deleteTask: (taskId: string) => Promise<void>;
+  refreshTasks: () => Promise<void>;
   
-  // Clients
-  clients: Client[];
-  clientsLoading: boolean;
-  createClient: (clientData: any) => Promise<void>;
-  updateClient: (clientId: string, updates: Partial<Client>) => Promise<void>;
-  deleteClient: (clientId: string) => Promise<void>;
-  
-  // Team
-  teamMembers: TeamMember[];
+  // Team data
+  teamMembers: any[];
   teamLoading: boolean;
+  refreshTeam: () => Promise<void>;
   
-  // Profile
-  profile: any;
-  profileLoading: boolean;
+  // Activity data
+  activities: any[];
+  activitiesLoading: boolean;
+  refreshActivities: () => Promise<void>;
   
-  // Analytics
-  analytics: AnalyticsData;
+  // Global refresh
+  refreshAll: () => Promise<void>;
   
-  // Refetch functions
-  refetchTasks: () => Promise<void>;
-  refetchClients: () => Promise<void>;
-  refetchTeam: () => Promise<void>;
+  // Analytics data
+  analytics: {
+    totalTasks: number;
+    completedTasks: number;
+    inProgressTasks: number;
+    overdueTasks: number;
+    completionRate: number;
+    averageCompletionTime: number;
+    tasksByPlatform: Record<string, number>;
+    tasksByPriority: Record<string, number>;
+    teamProductivity: Array<{ memberId: string; name: string; completedTasks: number; efficiency: number }>;
+    weeklyProgress: Array<{ week: string; completed: number; created: number }>;
+  };
 }
 
 const AppDataContext = createContext<AppDataContextType | undefined>(undefined);
 
 export const AppDataProvider = ({ children }: { children: React.ReactNode }) => {
   const { user } = useAuth();
-  const { profile, loading: profileLoading } = useProfile();
+  const { tasks, loading: tasksLoading, refetch: refreshTasks } = useTasks();
+  const { teamMembers, loading: teamLoading, refetch: refreshTeam } = useTeam();
+  const { activities, loading: activitiesLoading, refetch: refreshActivities } = useActivity();
   
-  // Tasks
-  const { 
-    tasks, 
-    loading: tasksLoading, 
-    createTask, 
-    updateTask, 
-    updateTaskStatus, 
-    deleteTask, 
-    refetch: refetchTasks 
-  } = useTasks();
-  
-  // Clients
-  const { 
-    clients, 
-    loading: clientsLoading, 
-    createClient, 
-    updateClient, 
-    deleteClient, 
-    refetch: refetchClients 
-  } = useClients();
-  
-  // Team
-  const { 
-    teamMembers, 
-    loading: teamLoading, 
-    refetch: refetchTeam 
-  } = useTeam();
+  const [analytics, setAnalytics] = useState<AppDataContextType['analytics']>({
+    totalTasks: 0,
+    completedTasks: 0,
+    inProgressTasks: 0,
+    overdueTasks: 0,
+    completionRate: 0,
+    averageCompletionTime: 0,
+    tasksByPlatform: {},
+    tasksByPriority: {},
+    teamProductivity: [],
+    weeklyProgress: []
+  });
 
-  // Calculate analytics data
-  const analytics = useMemo((): AnalyticsData => {
+  useEffect(() => {
+    if (!user) return;
+
+    const channel = supabase
+      .channel('public:tasks')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks' },
+        (payload) => {
+          console.log('Realtime change received!', payload);
+          refreshTasks();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, refreshTasks]);
+
+  // Calculate analytics whenever tasks or team data changes
+  useEffect(() => {
+    if (!tasks.length) return;
+
     const now = new Date();
+    const totalTasks = tasks.length;
     const completedTasks = tasks.filter(task => task.status === 'completed').length;
+    const inProgressTasks = tasks.filter(task => task.status === 'in-progress').length;
     const overdueTasks = tasks.filter(task => 
       task.due_date && new Date(task.due_date) < now && task.status !== 'completed'
     ).length;
-
-    // Calculate completion rate
-    const completionRate = tasks.length > 0 ? Math.round((completedTasks / tasks.length) * 100) : 0;
-
-    // Calculate average completion time (mock calculation)
-    const averageCompletionTime = Math.round(Math.random() * 5 + 2); // 2-7 days
+    
+    const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    
+    // Calculate average completion time
+    const completedTasksWithDates = tasks.filter(task => 
+      task.status === 'completed' && task.created_at && task.completed_at
+    );
+    const averageCompletionTime = completedTasksWithDates.length > 0 
+      ? completedTasksWithDates.reduce((acc, task) => {
+          const created = new Date(task.created_at);
+          const completed = new Date(task.completed_at);
+          return acc + (completed.getTime() - created.getTime());
+        }, 0) / completedTasksWithDates.length / (1000 * 60 * 60 * 24) // Convert to days
+      : 0;
 
     // Tasks by platform
     const tasksByPlatform = tasks.reduce((acc, task) => {
@@ -126,80 +121,91 @@ export const AppDataProvider = ({ children }: { children: React.ReactNode }) => 
     }, {} as Record<string, number>);
 
     // Team productivity
-    const teamProductivity = teamMembers.map(member => ({
-      memberId: member.id,
-      name: `${member.first_name || ''} ${member.last_name || ''}`.trim() || member.email,
-      completedTasks: member.tasks_completed || 0,
-      efficiency: Math.round(Math.random() * 40 + 60), // 60-100%
-    }));
-
-    // Weekly progress (mock data for last 6 weeks)
-    const weeklyProgress = Array.from({ length: 6 }, (_, i) => {
-      const weekDate = new Date(now);
-      weekDate.setDate(weekDate.getDate() - (i * 7));
+    const teamProductivity = teamMembers.map(member => {
+      const memberTasks = tasks.filter(task => task.assignee_id === member.id);
+      const memberCompletedTasks = memberTasks.filter(task => task.status === 'completed').length;
+      const efficiency = memberTasks.length > 0 
+        ? Math.round((memberCompletedTasks / memberTasks.length) * 100)
+        : 0;
+      
       return {
-        week: `Week ${6-i}`,
-        created: Math.floor(Math.random() * 10 + 5),
-        completed: Math.floor(Math.random() * 8 + 3),
+        memberId: member.id,
+        name: `${member.first_name || ''} ${member.last_name || ''}`.trim() || 'Unknown',
+        completedTasks: memberCompletedTasks,
+        efficiency
       };
     });
 
-    return {
-      totalTasks: tasks.length,
+    // Weekly progress (last 8 weeks)
+    const weeklyProgress = [];
+    for (let i = 7; i >= 0; i--) {
+      const weekStart = new Date(now);
+      weekStart.setDate(weekStart.getDate() - (i * 7));
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      
+      const weekTasks = tasks.filter(task => {
+        const taskDate = new Date(task.created_at);
+        return taskDate >= weekStart && taskDate <= weekEnd;
+      });
+      
+      const weekCompleted = weekTasks.filter(task => 
+        task.status === 'completed' && 
+        task.completed_at && 
+        new Date(task.completed_at) >= weekStart && 
+        new Date(task.completed_at) <= weekEnd
+      ).length;
+
+      weeklyProgress.push({
+        week: `Week ${8 - i}`,
+        completed: weekCompleted,
+        created: weekTasks.length
+      });
+    }
+
+    setAnalytics({
+      totalTasks,
       completedTasks,
-      completionRate,
+      inProgressTasks,
       overdueTasks,
-      averageCompletionTime,
+      completionRate,
+      averageCompletionTime: Math.round(averageCompletionTime * 10) / 10,
       tasksByPlatform,
       tasksByPriority,
       teamProductivity,
-      weeklyProgress,
-    };
+      weeklyProgress
+    });
   }, [tasks, teamMembers]);
 
-  // Log data for debugging
-  useEffect(() => {
-    console.log('=== APP DATA CONTEXT STATE ===');
-    console.log('User:', user?.email);
-    console.log('Profile:', profile);
-    console.log('Tasks count:', tasks.length);
-    console.log('Clients count:', clients.length);
-    console.log('Team members count:', teamMembers.length);
-    console.log('Analytics:', analytics);
-    console.log('Loading states:', { tasksLoading, clientsLoading, teamLoading, profileLoading });
-  }, [user, profile, tasks, clients, teamMembers, analytics, tasksLoading, clientsLoading, teamLoading, profileLoading]);
+  const refreshAll = async () => {
+    await Promise.all([
+      refreshTasks(),
+      refreshTeam(),
+      refreshActivities()
+    ]);
+  };
 
-  const value: AppDataContextType = {
+  const value = {
     // Tasks
     tasks,
     tasksLoading,
-    createTask,
-    updateTask,
-    updateTaskStatus,
-    deleteTask,
-    
-    // Clients
-    clients,
-    clientsLoading,
-    createClient,
-    updateClient,
-    deleteClient,
+    refreshTasks,
     
     // Team
     teamMembers,
     teamLoading,
+    refreshTeam,
     
-    // Profile
-    profile,
-    profileLoading,
+    // Activities
+    activities,
+    activitiesLoading,
+    refreshActivities,
+    
+    // Global
+    refreshAll,
     
     // Analytics
-    analytics,
-    
-    // Refetch functions
-    refetchTasks,
-    refetchClients,
-    refetchTeam,
+    analytics
   };
 
   return (
@@ -216,3 +222,4 @@ export const useAppData = () => {
   }
   return context;
 };
+
