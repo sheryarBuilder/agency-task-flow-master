@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useTasks } from '@/hooks/useTasks';
 import { useTeam } from '@/hooks/useTeam';
@@ -13,8 +12,10 @@ import TaskBoard from '@/components/TaskBoard';
 import CreateTaskDialog from '@/components/CreateTaskDialog';
 import CreateClientDialog from '@/components/CreateClientDialog';
 import ClientCard from '@/components/ClientCard';
+import ClientTaskView from '@/components/ClientTaskView';
 import { Button } from '@/components/ui/button';
 import { Building2, Plus } from 'lucide-react';
+import { isToday, isThisWeek, isThisMonth, parseISO } from 'date-fns';
 
 const Tasks = () => {
   const { tasks, loading, refetch } = useTasks();
@@ -28,6 +29,7 @@ const Tasks = () => {
   const [platformFilter, setPlatformFilter] = useState('all');
   const [assigneeFilter, setAssigneeFilter] = useState('all');
   const [clientFilter, setClientFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('all');
   const [viewMode, setViewMode] = useState<'list' | 'kanban' | 'clients'>('kanban');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createClientDialogOpen, setCreateClientDialogOpen] = useState(false);
@@ -45,6 +47,16 @@ const Tasks = () => {
     const matchesPlatform = platformFilter === 'all' || task.platform === platformFilter;
     const matchesAssignee = assigneeFilter === 'all' || task.assignee_id === assigneeFilter;
     const matchesClient = clientFilter === 'all' || task.client_id === clientFilter;
+
+    // Date filter
+    if (task.due_date) {
+      const dueDate = parseISO(task.due_date);
+      if (dateFilter === 'today' && !isToday(dueDate)) return false;
+      if (dateFilter === 'week' && !isThisWeek(dueDate, { weekStartsOn: 1 })) return false;
+      if (dateFilter === 'month' && !isThisMonth(dueDate)) return false;
+    } else if (dateFilter !== 'all') {
+      return false;
+    }
 
     return matchesSearch && matchesStatus && matchesPriority && matchesPlatform && matchesAssignee && matchesClient;
   });
@@ -65,6 +77,7 @@ const Tasks = () => {
     setPlatformFilter('all');
     setAssigneeFilter('all');
     setClientFilter('all');
+    setDateFilter('all');
   };
 
   const getClientTaskCount = (clientId: string) => {
@@ -91,68 +104,50 @@ const Tasks = () => {
           showClientView={isTeamLead}
         />
 
-        {viewMode === 'clients' && isTeamLead && (
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold text-gray-900">Client Management</h2>
-              <Button 
-                onClick={() => setCreateClientDialogOpen(true)}
-                className="flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                Add Client
-              </Button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {clients.map((client) => (
-                <ClientCard
-                  key={client.id}
-                  client={client}
-                  taskCount={getClientTaskCount(client.id)}
-                  teamCount={0}
-                  onClick={() => setClientFilter(client.id)}
-                />
-              ))}
-            </div>
-          </div>
+        {viewMode === 'clients' ? (
+          <ClientTaskView clients={clients} tasks={userTasks} teamMembers={teamMembers} />
+        ) : (
+          <>
+            {(viewMode === 'list' || viewMode === 'kanban') && (
+              <TaskFilters
+                searchTerm={searchTerm}
+                setSearchTerm={setSearchTerm}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+                priorityFilter={priorityFilter}
+                setPriorityFilter={setPriorityFilter}
+                platformFilter={platformFilter}
+                setPlatformFilter={setPlatformFilter}
+                assigneeFilter={assigneeFilter}
+                setAssigneeFilter={setAssigneeFilter}
+                clientFilter={clientFilter}
+                setClientFilter={setClientFilter}
+                dateFilter={dateFilter}
+                setDateFilter={setDateFilter}
+                teamMembers={isTeamLead ? teamMembers : []}
+                clients={isTeamLead ? clients : []}
+                onClearFilters={handleClearFilters}
+                showAssigneeFilter={isTeamLead}
+                showClientFilter={isTeamLead}
+              />
+            )}
+
+            <TaskStats tasks={userTasks} />
+
+            {viewMode === 'kanban' ? (
+              <TaskBoard
+                tasks={filteredTasks}
+                teamMembers={isTeamLead ? teamMembers : []}
+                onTaskUpdate={refetch}
+              />
+            ) : viewMode === 'list' ? (
+              <TaskListView
+                filteredTasks={filteredTasks}
+                teamMembers={isTeamLead ? teamMembers : []}
+              />
+            ) : null}
+          </>
         )}
-
-        {viewMode === 'list' && (
-          <TaskFilters
-            searchTerm={searchTerm}
-            setSearchTerm={setSearchTerm}
-            statusFilter={statusFilter}
-            setStatusFilter={setStatusFilter}
-            priorityFilter={priorityFilter}
-            setPriorityFilter={setPriorityFilter}
-            platformFilter={platformFilter}
-            setPlatformFilter={setPlatformFilter}
-            assigneeFilter={assigneeFilter}
-            setAssigneeFilter={setAssigneeFilter}
-            clientFilter={clientFilter}
-            setClientFilter={setClientFilter}
-            teamMembers={isTeamLead ? teamMembers : []}
-            clients={isTeamLead ? clients : []}
-            onClearFilters={handleClearFilters}
-            showAssigneeFilter={isTeamLead}
-            showClientFilter={isTeamLead}
-          />
-        )}
-
-        <TaskStats 
-          tasks={userTasks}
-          filteredTasks={filteredTasks}
-          viewMode={viewMode}
-        />
-
-        {viewMode === 'kanban' ? (
-          <TaskBoard />
-        ) : viewMode === 'list' ? (
-          <TaskListView 
-            filteredTasks={filteredTasks}
-            teamMembers={isTeamLead ? teamMembers : []}
-          />
-        ) : null}
 
         <CreateTaskDialog 
           open={createDialogOpen} 
